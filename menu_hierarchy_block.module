@@ -93,7 +93,7 @@ function menu_hierarchy_block_theme_suggestions_menu(array $variables) {
 
     // Context module (and perhaps others?) adds 'region' into the config.
     if (!empty($config['region'])) {
-      $suggestions[] = 'menu__region_' . $config['region'];
+      $suggestions[] = 'menu__region__' . $config['region'];
       $suggestions[] = 'menu__' . $menu_name . '__region_' . $config['region'];
     }
 

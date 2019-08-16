@@ -11,8 +11,10 @@ use Drupal\Core\Cache\Cache;
 use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
+use Drupal\Core\Entity\FieldableEntityInterface;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Core\Menu\MenuActiveTrailInterface;
+use Drupal\Core\Menu\MenuLinkManagerInterface;
 use Drupal\Core\Menu\MenuLinkTreeInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
@@ -28,6 +30,13 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    * @var \Drupal\Core\Menu\MenuLinkTreeInterface
    */
   protected $menuTree;
+
+  /**
+   * The menu link manager.
+   *
+   * @var \Drupal\Core\Menu\MenuLinkManagerInterface
+   */
+  protected $menuLinkManager;
 
   /**
    * The active menu trail service.
@@ -61,6 +70,8 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    *   The plugin implementation definition.
    * @param \Drupal\Core\Menu\MenuLinkTreeInterface $menu_tree
    *   The menu tree service.
+   * @param \Drupal\Core\Menu\MenuLinkManagerInterface $menu_link_manager
+   *   The menu link manager.
    * @param \Drupal\Core\Menu\MenuActiveTrailInterface $menu_active_trail
    *   The active menu trail service.
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
@@ -68,9 +79,19 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
    *   The entity display repository.
    */
-  public function __construct(array $configuration, $plugin_id, $plugin_definition, MenuLinkTreeInterface $menu_tree, MenuActiveTrailInterface $menu_active_trail, EntityTypeManagerInterface $entity_type_manager, EntityDisplayRepositoryInterface $entity_display_repository) {
+  public function __construct(
+    array $configuration,
+    $plugin_id,
+    $plugin_definition,
+    MenuLinkTreeInterface $menu_tree,
+    MenuLinkManagerInterface $menu_link_manager,
+    MenuActiveTrailInterface $menu_active_trail,
+    EntityTypeManagerInterface $entity_type_manager,
+    EntityDisplayRepositoryInterface $entity_display_repository
+  ) {
     parent::__construct($configuration, $plugin_id, $plugin_definition);
     $this->menuTree = $menu_tree;
+    $this->menuLinkManager = $menu_link_manager;
     $this->menuActiveTrail = $menu_active_trail;
     $this->entityTypeManager = $entity_type_manager;
     $this->entityDisplayRepository = $entity_display_repository;
@@ -85,6 +106,7 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
       $plugin_id,
       $plugin_definition,
       $container->get('menu.link_tree'),
+      $container->get('plugin.manager.menu.link'),
       $container->get('menu.active_trail'),
       $container->get('entity_type.manager'),
       $container->get('entity_display.repository')
@@ -96,6 +118,13 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    */
   public function blockForm($form, FormStateInterface $form_state) {
     $config = $this->configuration;
+
+    $form['show_empty'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Show empty'),
+      '#description' => $this->t('Allows the block to still show even with no links.'),
+      '#default_value' => $config['show_empty'],
+    ];
 
     // View modes selection.
     $form['overrides'] = [
@@ -149,6 +178,7 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    * {@inheritdoc}
    */
   public function blockSubmit($form, FormStateInterface $form_state) {
+    $this->configuration['show_empty'] = $form_state->getValue('show_empty');
     $this->configuration['title'] = $form_state->getValue('title');
     $this->configuration['view_modes'] = array_filter($form_state->getValue('view_modes'));
   }
@@ -162,26 +192,36 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
   abstract protected function getMenuTree();
 
   /**
-   * {@inheritdoc}
+   * Process the tree to remove any inaccessible items.
+   *
+   * @param \Drupal\Core\Menu\MenuLinkTreeElement[] $tree
+   *   The menu tree.
+   *
+   * @return \Drupal\Core\Menu\MenuLinkTreeElement[]
+   *   The transformed menu tree.
    */
-  public function build() {
-    $tree = $this->getMenuTree();
+  protected function performTransform(array $tree) {
     $manipulators = [
       ['callable' => 'menu.default_tree_manipulators:checkNodeAccess'],
       ['callable' => 'menu.default_tree_manipulators:checkAccess'],
       ['callable' => 'menu.default_tree_manipulators:generateIndexAndSort'],
     ];
-    $tree = $this->menuTree->transform($tree, $manipulators);
+    return $this->menuTree->transform($tree, $manipulators);
+  }
+
+  /**
+   * {@inheritdoc}
+   */
+  public function build() {
+    $tree = $this->getMenuTree();
+    $tree = $this->performTransform($tree);
 
     // Generate the built menu.
     $build = $this->menuTree->build($tree);
 
-    // Convert any of the links using the configuration settings.
-    $build['#items'] = $this->convertLinks($build['#items']);
-
     if (!empty($build['#theme'])) {
       // Add the configuration for use in menu_hierarchy_block_theme_suggestions_menu().
-      $build['#menu_hierarchy_block_configuration'] = $this->configuration + ['plugin_id' => $this->getPluginId()];
+      $build['#menu_hierarchy_block_configuration'] = $this->configuration + ['plugin_id' => str_replace(':', '__', $this->getPluginId())];
       // Remove the menu name-based suggestion so we can control its precedence
       // better in menu_hierarchy_block_theme_suggestions_menu().
       $build['#theme'] = 'menu';
@@ -191,7 +231,14 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
       'route_parameters' => ['menu' => $this->getDerivativeId()],
     ];
 
-    return $build;
+    // Convert any of the links using the configuration settings.
+    if (!empty($build['#items'])) {
+      $build['#items'] = $this->convertLinks($build['#items']);
+      return $build;
+    }
+
+    // Configured to show empty block.
+    return !empty($this->configuration['show_empty']) ? $build : [];
   }
 
   /**
@@ -250,6 +297,7 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
    */
   public function defaultConfiguration() {
     return [
+      'show_empty' => FALSE,
       'title' => '',
       'view_modes' => [],
     ];
@@ -314,5 +362,64 @@ abstract class MenuHierarchyBlockBase extends BlockBase implements ContainerFact
   protected function isValidEntity(EntityTypeInterface $definition) {
     return $definition->get('field_ui_base_route') && $definition->hasViewBuilderClass();
   }
+
+  /**
+   * Get the menu trail for the context entity.
+   *
+   * @return null|array
+   *   The menu trail ids based on the entity context.
+   */
+  protected function getEntityTrail() {
+    // Get the menu name.
+    $menu_name = $this->getDerivativeId();
+
+    // Get the entity context, and check if it exists. As 'node' is currently
+    // a special case, checking if the entity is fieldable also cuts out the
+    // unnecessary items.
+    $entity = $this->getContextValue('entity');
+    if (!$entity || !($entity instanceof FieldableEntityInterface)) {
+      return NULL;
+    }
+
+    // Check if the entity is a node.
+    if ($entity->getEntityTypeId() === 'node' && function_exists('menu_ui_get_menu_link_defaults')) {
+      $links = menu_ui_get_menu_link_defaults($entity);
+      if (($links['menu_name'] === $menu_name) && $links['id']) {
+        $trail = ['' => ''];
+        if ($parents = $this->menuLinkManager->getParentIds($links['id'])) {
+          $trail = $parents + $trail;
+        }
+        return $trail;
+      }
+    }
+
+    // Check for entity support via the menu_link module.
+    $field_definitions = $entity->getFieldDefinitions();
+    foreach ($field_definitions as $field_name => $definition) {
+      if ($definition->getType() === 'menu_link' && $entity->get($field_name)->offsetExists(0)) {
+        /** @var \Drupal\menu_link\Plugin\Field\FieldType\MenuLinkItem $item */
+        $item = $entity->get($field_name)->get(0);
+        $id = $item->getMenuPluginId();
+
+        // Get the link definition from menu_link item.
+        if ($this->menuLinkManager->hasDefinition($id)) {
+          $link = $this->menuLinkManager->getDefinition($id);
+
+          // Only process this field for a trail if the link matches the correct menu.
+          if ($link['menu_name'] === $menu_name) {
+            $trail = ['' => ''];
+            if ($parents = $this->menuLinkManager->getParentIds($id)) {
+              $trail = $parents + $trail;
+            }
+            return $trail;
+          }
+        }
+      }
+    }
+
+    // We have not located a valid method for provide an entity menu link.
+    return NULL;
+  }
+
 
 }

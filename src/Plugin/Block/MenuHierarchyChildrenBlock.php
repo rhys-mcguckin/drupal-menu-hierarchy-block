@@ -8,11 +8,11 @@ namespace Drupal\menu_hierarchy_block\Plugin\Block;
 use Drupal\Core\Menu\MenuTreeParameters;
 
 /**
- * Provides a menu hierarchy sibling block.
+ * Provides a menu hierarchy children block.
  *
  * @Block(
- *   id = "menu_hierarchy_sibling",
- *   admin_label = @Translation("Siblings"),
+ *   id = "menu_hierarchy_children",
+ *   admin_label = @Translation("Children"),
  *   category = @Translation("Menus"),
  *   deriver = "Drupal\menu_hierarchy_block\Plugin\Derivative\MenuHierarchyBlock",
  *   context = {
@@ -20,8 +20,8 @@ use Drupal\Core\Menu\MenuTreeParameters;
  *   }
  * )
  */
+class MenuHierarchyChildrenBlock extends MenuHierarchyBlockBase {
 
-class MenuHierarchySiblingBlock extends MenuHierarchyBlockBase {
 
   /**
    * {@inheritdoc}
@@ -42,18 +42,21 @@ class MenuHierarchySiblingBlock extends MenuHierarchyBlockBase {
       return [];
     }
 
-    // Get the parent.
-    $parent = $trail[$depth - 1] ?? '';
+    // Get the current active menu item.
+    $current = $trail[$depth] ?? '';
+    if (!$current) {
+      $current = 'standard.front_page';
+    }
 
     // Create the parameters for loading.
     $parameters = (new MenuTreeParameters())
       ->setActiveTrail($active_trail)
-      ->setRoot($parent)
+      ->setRoot($current)
       ->onlyEnabledLinks()
       ->setMinDepth(0)
       ->setMaxDepth(1);
 
-    // Load the sibling tree.
+    // Load the children tree.
     $tree = $this->menuTree->load($menu_name, $parameters);
 
     return $tree;
