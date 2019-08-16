@@ -40,7 +40,7 @@
             <ul>
         {% endif %}
         {% for item in items %}
-            <li{{ item.attributes }}>
+            <li{{ item.attributes.addClass(item.entity ? 'entity-display' : 'link-display') }}>
                 {% if item.entity %}
                     {{ item.rendered_entity }}
                 {% else %}
